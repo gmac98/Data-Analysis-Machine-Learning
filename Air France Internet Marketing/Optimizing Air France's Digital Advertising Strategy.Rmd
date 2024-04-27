@@ -15,7 +15,7 @@ performance measures across many aspects.We analyze the dataset thoroughly, stud
 of numerical and categorical characteristics to identify patterns that could affect the effectiveness
 of the airline's digital strategy.We will analyze the connection between ad placement, click-through rates,
 and average cost per click to evaluate the cost-effectiveness of campaigns on various search engine platforms.
-Using advanced visualization tools, we will create a story based on the data to uncover insights on
+Using advanced visualization tools, I will create a story based on the data to uncover insights on
 keyword performance, bid strategy effectiveness, and their impact on bookings and revenue. This detailed
 analysis seeks to pinpoint the strengths and areas for improvement in Air France's online advertising
 strategy, with the goal of informing strategic decisions to enhance the airline's online visibility and
@@ -29,9 +29,12 @@ client acquisition endeavors.
 library(tidyverse)
 library(tidyr)
 library(plotly)
+library(wordcloud)
+library(corrplot)
 library(Amelia) # For Missing Data
 library(ggplot2) # For Visualization 
 library(dplyr) # For Data Manipulation 
+library(tm)
 
 # setting the directory
 setwd("D:\\hult coursework\\MBAN\\Spring 2024_1\\Business Challenge #2")
@@ -534,12 +537,17 @@ full.data <- full.data[!tolower(full.data$category) == 'uncategorized', ]
 # Create a frequency table of the categories
 category_freq <- table(full.data$category)
 
-# Use wordcloud2 to create the word cloud
-wordcloud2(category_freq)
+# Set colors (optional, customize as desired)
+set.seed(123)  # For reproducibility
+colors <- rainbow(nrow(category_freq))
+
+# Create the wordcloud
+wordcloud(names(category_freq), sort(category_freq, decreasing = TRUE), 
+         min.freq = 1, colors = colors, max.words=100, random.order=FALSE)
 ```
 
 ANALYSIS:
-The term 'France' appears as the most prominent word in the cloud, suggesting that it is one of the most frequent categories.
+The term 'airfare' appears as the most prominent word in the cloud, suggesting that it is one of the most frequent categories.
 Several city names such as Bordeaux', 'Lyon', 'Marseille', 'Athens', 'Venice', and 'Berlin' are prominently featured.
 This suggests a strong geographic component to the keyword strategy.Words like 'flight', 'airline', 'discount', and
 'airports' are prominent, which highlights the focus on core aspects of service offerings and related terms that
@@ -572,8 +580,14 @@ cost-effective options.
 # filtering out the numeric data for correlation
 numeric_data <- full.data[, sapply(full.data, is.numeric)]
 
+# This selects rows where all columns have values
+all_complete <- complete.cases(numeric_data)
+
+# Select all columns from those rows
+numeric_data_complete <- numeric_data[all_complete,]
+
 # Calculate the correlation matrix
-cor_matrix <- cor(numeric_data)
+cor_matrix <- cor(numeric_data_complete)
 
 # Plotting the correlation heatmap 
 corrplot(cor_matrix, method = "color", type = "upper", order = "hclust",
