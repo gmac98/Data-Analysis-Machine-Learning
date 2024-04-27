@@ -1,0 +1,723 @@
+---
+title: "Air France Internet Marketing"
+date: "2/25/2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## INTRODUCTION
+
+The study will examine the complex network of digital advertising data, investigating important
+performance measures across many aspects.We analyze the dataset thoroughly, studying the distribution
+of numerical and categorical characteristics to identify patterns that could affect the effectiveness
+of the airline's digital strategy.We will analyze the connection between ad placement, click-through rates,
+and average cost per click to evaluate the cost-effectiveness of campaigns on various search engine platforms.
+Using advanced visualization tools, we will create a story based on the data to uncover insights on
+keyword performance, bid strategy effectiveness, and their impact on bookings and revenue. This detailed
+analysis seeks to pinpoint the strengths and areas for improvement in Air France's online advertising
+strategy, with the goal of informing strategic decisions to enhance the airline's online visibility and
+client acquisition endeavors.
+
+```{r}
+# Installing packages and initiating libraries
+#install.packages("tidyr")
+#install.packages("tidyverse")
+#install.packages("plotly")
+library(tidyverse)
+library(tidyr)
+library(plotly)
+library(Amelia) # For Missing Data
+library(ggplot2) # For Visualization 
+library(dplyr) # For Data Manipulation 
+
+# setting the directory
+setwd("D:\\hult coursework\\MBAN\\Spring 2024_1\\Business Challenge #2")
+getwd()
+
+# create na_strings object to identify different type of missing data in dataset
+na_strings <- c("-999","","not available","missing", "really missing", "N/A")
+
+# reading training data from file
+df.train <- read.csv("train.csv", header = TRUE, na.strings = na_strings)
+df.train$set <- 'Not Kaggle'         # setting variable for kaggle
+
+# reading testing data from file
+df.test <- read.csv("test.csv", header = TRUE, na.strings = na_strings)
+df.test$set <- 'Kaggle'              # setting variable for kaggle
+
+# data on Kayak
+kayak_net_revenue <- 230126.87
+kayak_cost <- 3567.13
+kayak_click <- 2839
+
+# Concatenating training and testing dataframes together 
+full.data <- rbind(df.train, df.test)
+str(full.data)
+
+# Changing column names for ease of use
+colnames(full.data) <- c('entry_id','publisher_name','keyword','match_type','campaign','keyword_group','category',
+                        'bid_strategy','status','search_engine_bid','clicks','click_charges','avg_cost_per_click',
+                        'impressions','engine_click_thru_p','avg_position','trans_conv_p','total_cost_trans','amount',
+                        'total_cost','total_vol_of_bookings','set')
+
+# selecting columns with numeric data
+num_cols <- c('search_engine_bid','clicks','click_charges','avg_cost_per_click','impressions','engine_click_thru_p',
+              'avg_position', 'trans_conv_p','total_cost_trans','amount','total_cost','total_vol_of_bookings')
+
+# Clean and convert data in specified columns
+full.data[, num_cols] <- lapply(full.data[, num_cols], function(col) {
+  # Remove dollar signs, commas, and percent signs
+  col <- gsub("[$,%]", "", col)
+  
+  # Handle potential errors during conversion
+  tryCatch({
+    # Convert to numeric
+    return(as.numeric(col))
+  }, error = function(e) {
+    # Handle errors by print a warning
+    warning(paste("Error converting", colname(col), ":", e))
+    return(NA)
+  })
+})
+
+# Calculate the number of missing values in every column
+colSums(is.na(full.data))
+
+# We have 1224 missing values in Bid Strategy column and 48 values in match_type are N/A
+# out of 4510 total values
+
+# Imputing N/A values for match_type with 'Broad'
+full.data$match_type <- ifelse(is.na(full.data$match_type), "Broad", full.data$match_type)
+
+# Bid Strategy is an important column for decision making and the number of null values is really high.
+# Therefore, it would be best to add a new category for missing values.
+full.data$bid_strategy <- ifelse(is.na(full.data$bid_strategy), "Not Specified", full.data$bid_strategy)
+
+# summarize values in dataset
+summary(full.data)
+
+```
+
+### Feature Engineering
+```{r}
+# Feature 1 : Net Revenue
+# Net Revenue: This reveals the total revenue generated after accounting for campaign costs.
+# It is calculated as: Net Revenue = Amount - Total Cost
+full.data$revenue <- as.numeric(full.data$amount - full.data$total_cost)
+
+# Feature 2 : Return on Advertisement (ROA) (also known as ROI)
+# Return on Advertisement (ROA): This measures the return on investment in advertising expenses, 
+# showing how efficiently ad spend translates into revenue.
+# It is calculated as:ROA = Net Revenue / Total Cost
+full.data$roa <- ifelse(full.data$total_cost!= 0, full.data$revenue / full.data$total_cost, 0)
+full.data$roa <- as.numeric(full.data$roa)
+
+# Feature 3 : Booking Probability
+# Booking probability: This combines CTR and TCR, offering a single metric to gauge the 
+# likelihood of an ad resulting in a booking.
+# It is calculated as:Booking Probability = ( CTR(in %) * TCR(in %) ) / 100
+full.data$book_prob <- as.numeric((full.data$trans_conv_p * full.data$engine_click_thru_p) /100)
+
+str(full.data)
+
+# write file to csv for modeling in python
+# write.csv(full.data, "full_data_features.csv", row.names=FALSE)
+```
+
+## ANALYSIS
+```{r}
+# 1. Pivot Table to compare Return on advertising and Avg Cost per Click
+full.data_pivot1 <- full.data %>% group_by(publisher_name) %>% summarize(
+  avg_ROA = mean(roa),
+  avg_cpc = mean(avg_cost_per_click)
+)
+full.data_pivot1
+```
+Analysis: Both Google and MSN show better avg Cost-Per-Click (CPC) in the US compared to Global,
+suggesting more targeted traffic from US searches.MSN holds a significant CPC advantage over
+Google and Yahoo in both Global and US, indicating potential for budget optimization.The low CPCs
+for Overture (both global and US) suggest it could be a valuable channel for reaching budget-conscious
+customers while maintaining decent ROA. Both Google and MSN global campaigns deliver significantly
+higher ROA (4.69 and 10.6) compared to their US counterparts, indicating potential for further
+optimization in US-specific targeting. While Yahoo US boasts a high ROA (10.3), its CPC is close
+to Google US, raising questions about its cost-effectiveness compared to Google's wider reach.
+
+```{r}
+# 2. Pivot Table to compare different publisher SEM   
+full.data_pivot2 <- full.data %>% group_by(publisher_name) %>% summarize(
+  total_records = n(),
+  total_cost = sum(total_cost),
+  avg_cpc = mean(avg_cost_per_click),
+  avg_ctr = mean(engine_click_thru_p),
+  avg_book_prob = mean(book_prob),
+  avg_ROA = mean(roa)
+)
+full.data_pivot2
+```
+Analysis: Yahoo-US stands out with the highest click-through rate and return on advertising, suggesting
+effective targeting and ad wording are successful.Google-US delivers the most bookings with highest cost,
+but at a higher cost per click compared to other channels. MSN Global offers the highest return on advertising,
+potentially due to lower competition and targeted audiences. Overture US and Global have the lowest cost
+per click but also the lowest booking probabilities, requiring further investigation into their effectiveness.
+Diversifying beyond Google-US could be beneficial, focusing on channels like Yahoo-US and MSN-Global for
+cost-efficient reach and conversions.Optimizing campaigns for each publisher based on their strengths
+and weaknesses could significantly improve overall performance.
+
+```{r}
+# 3. Pivot table to compare publisher net revenue, tcr, booking probability and roa
+full.data_pivot3 <- full.data %>% group_by(publisher_name) %>% summarize(
+  total_records = n(),
+  avg_revenue = mean(revenue),
+  avg_tcr = mean(trans_conv_p),
+  avg_book_prob = mean(book_prob),
+  avg_ROA = mean(roa)
+)
+full.data_pivot3
+```
+Analysis: Yahoo-US stands out with the highest average booking probability and return on investment,
+despite having lower average revenue per booking. This suggests focusing efforts on optimizing
+Yahoo-US campaigns for further improvement.Both Global and US Overture have lower conversion rates
+and booking probabilities compared to other channels, suggesting a need to refine targeting or
+explore alternative strategies. MSN (Global and US) perform well in terms of revenue per booking
+and return on investment, suggesting potential for further budget allocation.While Google(Global and US) drives
+the most traffic, Google US leads in terms of conversion rate and booking probability,
+indicating a more engaged audience.
+
+```{r}
+# 4. Comparing publisher channel data with respect to kayak
+full.data_pivot4 <- full.data %>% group_by(publisher_name) %>% summarize(
+  avg_revenue = mean(revenue),
+  avg_ROA = mean(roa),
+  avg_cpc = mean(avg_cost_per_click)
+)
+full.data_pivot4 <- rbind(full.data_pivot4, list('Kayak',kayak_net_revenue, (kayak_net_revenue/kayak_cost),
+                                                 (kayak_click/kayak_cost)))
+full.data_pivot4
+```
+Analysis:Kayak generates an average revenue of $230,127 per user, which is over 100 times higher than the
+average revenue generated from all other channels combined.It also has the highest average ROA at 64.5,
+indicating a significant return on advertising spend compared to other channels with ROA ranging from 1.18 to
+10.6. Kayak's average cost-per-click (CPC) is $0.796, which is lower or comparable to most other channels,
+suggesting that Kayak might be attracting highly qualified leads despite its high revenue per user.Kayak might
+be targeting a niche audience with higher spending power or those closer to the conversion stage in the buying
+journey. The campaign on Kayak is focused on a different objective than other channels, such as brand
+awareness and direct bookings, leading to higher revenue per user.
+
+```{r}
+# Searching for best bid strategy and match type analysis using average roa
+
+# Creating a new data frame for the analysis and filtering on roa greater than 0 to
+# find best bid strategy and match type
+publisher_name <- unique(full.data$publisher_name)
+df.bid.match <- full.data
+df.bid.match <- df.bid.match[which(df.bid.match$roa > 0),]
+
+# unique categories in bid strategy and match type
+bid_strategy_cat <- unique(df.bid.match$bid_strategy)
+match_type_cat <- unique(df.bid.match$match_type)
+
+# 5. Searching for best bid strategy in each publisher channel
+roa_bid_strategy <-c()
+google_global_bid <- c()
+yahoo_us_bid <- c()
+overture_global_bid <- c()
+google_us_bid <- c()
+overture_us_bid <- c()
+msn_global_bid <- c()
+msn_us_bid <- c()
+
+
+for (i in 1:length(bid_strategy_cat)){
+  google_global_bid <- c(google_global_bid, mean(df.bid.match$roa[which(df.bid.match$bid_strategy == bid_strategy_cat[i] & 
+                                                                          df.bid.match$publisher_name == publisher_name[1])]))
+  yahoo_us_bid <- c(yahoo_us_bid, mean(df.bid.match$roa[which(df.bid.match$bid_strategy == bid_strategy_cat[i] & 
+                                                                          df.bid.match$publisher_name == publisher_name[2])]))
+  overture_global_bid <- c(overture_global_bid, mean(df.bid.match$roa[which(df.bid.match$bid_strategy == bid_strategy_cat[i] & 
+                                                                df.bid.match$publisher_name == publisher_name[3])]))
+  google_us_bid <- c(google_us_bid, mean(df.bid.match$roa[which(df.bid.match$bid_strategy == bid_strategy_cat[i] & 
+                                                                df.bid.match$publisher_name == publisher_name[4])]))
+  overture_us_bid <- c(overture_us_bid, mean(df.bid.match$roa[which(df.bid.match$bid_strategy == bid_strategy_cat[i] & 
+                                                                df.bid.match$publisher_name == publisher_name[5])]))
+  msn_global_bid <- c(msn_global_bid, mean(df.bid.match$roa[which(df.bid.match$bid_strategy == bid_strategy_cat[i] & 
+                                                                df.bid.match$publisher_name == publisher_name[6])]))
+  msn_us_bid <- c(msn_us_bid, mean(df.bid.match$roa[which(df.bid.match$bid_strategy == bid_strategy_cat[i] & 
+                                                                df.bid.match$publisher_name == publisher_name[7])]))
+  i <- i +1
+}
+
+roa_bid_strategy <- cbind(bid_strategy_cat, google_global_bid, yahoo_us_bid, overture_global_bid, google_us_bid, 
+                          overture_us_bid, msn_global_bid, msn_us_bid)
+roa_bid_strategy
+```
+Analysis: It's noteworthy that, with the exception of MSN-Global, all platforms have non-zero
+bids for the "Not Specified" row. This implies that automated tactics may be used in conjunction
+with some manual bidding.Position 2-5 Bid Strategy is one of the bid strategies that displays
+very high offers for MSN-Global and Overture-US, but the lack of bids for other platforms might
+mean that the platform is being targeted differently or that optimization is needed. With the highest
+and varied bid strategy for Google-US, each strategy is bringing in decent ROA but targeting
+Position 1-2 and Position 5-10 strategy is most successful. Hence, optimizing campaign to
+target these specific bids for Google-US will most likely bring successful results.
+
+```{r}
+# 6. Searching for best match type in each publisher channel
+roa_match_type <-c()
+google_global_match <- c()
+yahoo_us_match <- c()
+overture_global_match <- c()
+google_us_match <- c()
+overture_us_match <- c()
+msn_global_match <- c()
+msn_us_match <- c()
+
+
+for (i in 1:length(match_type_cat)){
+  google_global_match <- c(google_global_match, mean(df.bid.match$roa[which(df.bid.match$match_type == match_type_cat[i] & 
+                                                                          df.bid.match$publisher_name == publisher_name[1])]))
+  yahoo_us_match <- c(yahoo_us_match, mean(df.bid.match$roa[which(df.bid.match$match_type == match_type_cat[i] & 
+                                                                df.bid.match$publisher_name == publisher_name[2])]))
+  overture_global_match <- c(overture_global_match, mean(df.bid.match$roa[which(df.bid.match$match_type == match_type_cat[i] & 
+                                                                              df.bid.match$publisher_name == publisher_name[3])]))
+  google_us_match <- c(google_us_match, mean(df.bid.match$roa[which(df.bid.match$match_type == match_type_cat[i] & 
+                                                                  df.bid.match$publisher_name == publisher_name[4])]))
+  overture_us_match <- c(overture_us_match, mean(df.bid.match$roa[which(df.bid.match$match_type == match_type_cat[i] & 
+                                                                      df.bid.match$publisher_name == publisher_name[5])]))
+  msn_global_match <- c(msn_global_match, mean(df.bid.match$roa[which(df.bid.match$match_type == match_type_cat[i] & 
+                                                                    df.bid.match$publisher_name == publisher_name[6])]))
+  msn_us_match <- c(msn_us_match, mean(df.bid.match$roa[which(df.bid.match$match_type == match_type_cat[i] & 
+                                                            df.bid.match$publisher_name == publisher_name[7])]))
+  i <- i +1
+}
+
+roa_match_type <- cbind(match_type_cat, google_global_match, yahoo_us_match, overture_global_match, google_us_match, 
+                          overture_us_match, msn_global_match, msn_us_match)
+roa_match_type
+```
+Analysis: Google-Global delivers a significantly high mean ROA (261.13) in exact match, suggesting
+strong performance and targeting accuracy. Advanced match shows potential in some channels
+like Yahoo-US with significant ROA (330.27) and Overture(46.05),suggesting potential for
+optimization and refinement but performs lowly with Overture-US(2.79).MSN-Global dominates
+in Broad match with quite high ROA (113.68) showcasing strong performance. However, while it shows
+potential with a decent ROA for Google-US, MSN-US and Google-Global but it might require further
+optimization due to broader reach.Standard match delivers good ROA in specific channels like
+Overture-Global and Overture-US contrasting with low ROA in Yahoo-US, but suggests match types
+performance majorly varies with publisher channels.Data is missing for several match types,
+so making a conclusive analysis is difficult.
+
+```{r}
+## Searching for best bid strategy and match type analysis using average Transaction Conversion Rate (TCR)
+
+# Creating a new data frame for the analysis and filtering on roa greater than 0 to
+# find best bid strategy and match type
+df.bid.match2 <- full.data
+df.bid.match2 <- df.bid.match2[which(df.bid.match2$trans_conv_p > 0),]        # 367 records
+
+# unique categories in bid strategy and match type
+bid_strategy_cat <- unique(df.bid.match2$bid_strategy)
+match_type_cat <- unique(df.bid.match2$match_type)
+
+# 7. Searching for best bid strategy in each publisher channel
+tcr_bid_strategy <-c()
+google_global_bid <- c()
+yahoo_us_bid <- c()
+overture_global_bid <- c()
+google_us_bid <- c()
+overture_us_bid <- c()
+msn_global_bid <- c()
+msn_us_bid <- c()
+
+
+for (i in 1:length(bid_strategy_cat)){
+  google_global_bid <- c(google_global_bid, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$bid_strategy == bid_strategy_cat[i] & 
+                                                                          df.bid.match2$publisher_name == publisher_name[1])]))
+  yahoo_us_bid <- c(yahoo_us_bid, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$bid_strategy == bid_strategy_cat[i] & 
+                                                                df.bid.match2$publisher_name == publisher_name[2])]))
+  overture_global_bid <- c(overture_global_bid, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$bid_strategy == bid_strategy_cat[i] & 
+                                                                              df.bid.match2$publisher_name == publisher_name[3])]))
+  google_us_bid <- c(google_us_bid, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$bid_strategy == bid_strategy_cat[i] & 
+                                                                  df.bid.match2$publisher_name == publisher_name[4])]))
+  overture_us_bid <- c(overture_us_bid, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$bid_strategy == bid_strategy_cat[i] & 
+                                                                      df.bid.match2$publisher_name == publisher_name[5])]))
+  msn_global_bid <- c(msn_global_bid, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$bid_strategy == bid_strategy_cat[i] & 
+                                                                    df.bid.match2$publisher_name == publisher_name[6])]))
+  msn_us_bid <- c(msn_us_bid, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$bid_strategy == bid_strategy_cat[i] & 
+                                                            df.bid.match2$publisher_name == publisher_name[7])]))
+  i <- i +1
+}
+
+tcr_bid_strategy <- cbind(bid_strategy_cat, google_global_bid, yahoo_us_bid, overture_global_bid, google_us_bid, 
+                          overture_us_bid, msn_global_bid, msn_us_bid)
+tcr_bid_strategy
+```
+Analysis: Position 1-2 Target strategy shows a relatively higher TCR for Google-US and Overture-Global
+but lacks data for other bids, making it difficult to assess its full effectiveness.Position 5-10 Bid Strategy
+and Position 3-6 strategies have low TCRs compared to the baseline, suggesting these specific position ranges
+might not be ideal for Air France's target audience.While showing a moderate TCR for Not specified category,
+it lacks a specific targeting approach, potentially missing out on optimizing bids for higher conversion rates.
+Position 1-4 and Position 2-5 Bid strategies seem to achieve lower TCRs as compared to the baseline Not Specified
+strategy. This could indicate that focusing solely on specific positions might not be as effective
+as a broader approach in this case.
+
+```{r}
+# 8. Searching for best match type in each publisher channel
+tcr_match_type <-c()
+google_global_match <- c()
+yahoo_us_match <- c()
+overture_global_match <- c()
+google_us_match <- c()
+overture_us_match <- c()
+msn_global_match <- c()
+msn_us_match <- c()
+
+
+for (i in 1:length(match_type_cat)){
+  google_global_match <- c(google_global_match, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$match_type == match_type_cat[i] & 
+                                                                              df.bid.match2$publisher_name == publisher_name[1])]))
+  yahoo_us_match <- c(yahoo_us_match, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$match_type == match_type_cat[i] & 
+                                                                    df.bid.match2$publisher_name == publisher_name[2])]))
+  overture_global_match <- c(overture_global_match, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$match_type == match_type_cat[i] & 
+                                                                                  df.bid.match2$publisher_name == publisher_name[3])]))
+  google_us_match <- c(google_us_match, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$match_type == match_type_cat[i] & 
+                                                                      df.bid.match2$publisher_name == publisher_name[4])]))
+  overture_us_match <- c(overture_us_match, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$match_type == match_type_cat[i] & 
+                                                                          df.bid.match2$publisher_name == publisher_name[5])]))
+  msn_global_match <- c(msn_global_match, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$match_type == match_type_cat[i] & 
+                                                                        df.bid.match2$publisher_name == publisher_name[6])]))
+  msn_us_match <- c(msn_us_match, mean(df.bid.match2$trans_conv_p[which(df.bid.match2$match_type == match_type_cat[i] & 
+                                                                df.bid.match2$publisher_name == publisher_name[7])]))
+  i <- i +1
+}
+
+tcr_match_type <- cbind(match_type_cat, google_global_match, yahoo_us_match, overture_global_match, google_us_match, 
+                        overture_us_match, msn_global_match, msn_us_match)
+tcr_match_type
+```
+Analysis: Broad match type appears to have the highest TCRs for MSN-Global and MSN-US. However, it's
+important to consider that broad matches can lead to irrelevant traffic and potentially lower conversion
+rates in the long run.Standard match type shows a relatively high TCR for Yahoo_US but is missing data
+for other crucial platforms like Google.Advanced match type has the highest TCR for Yahoo-US but
+has significantly low value for other platforms.Exact match type has a moderate TCR for Google-Global
+and Google-US but lacks data for other platforms.
+
+```{r}
+## 9. SEM Keyword group Strategy
+
+# Top 2 keyword groups for each publisher channel
+top_keyword_groups <- df.bid.match %>%
+  group_by(publisher_name) %>%
+  count(keyword_group, sort = TRUE) %>%
+  slice_head(n = 2)
+
+top_keyword_groups
+```
+Analysis:Google-Global is focused on "Paris" and "France", targeting potential travelers seeking general
+information about those destinations, likely aiming for brand awareness and consideration.Meanwhile, Google-US
+focus is on "Air France Website" and "Air France Brand" which directly target users actively searching for
+Air France, indicating a clear intent to book. MSN(Global and US) focus on "Paris" and "Air France Brand"
+suggesting a mix of brand awareness and direct purchase intent.For Overture, channels have "Unassigned"
+as the top keyword group, indicating potential optimization opportunities. These keywords might not be
+categorized effectively or may be irrelevant, leading to wasted ad spend.Yahoo, similar to MSN, "Paris"
+and "Air France Website" target different stages of the buying journey.
+
+## DATA VISUALIZATIONS
+```{r}
+# 1. Distribution of numeric variables
+full.data %>%
+  select_if(is.numeric) %>%
+  gather(key = "variable", value = "value") %>%
+  ggplot(aes(x = value)) + facet_wrap(~variable, scales = "free") +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  theme_minimal() + labs(title = "Distribution of Numeric Variables")
+```
+
+ANALYSIS:
+Most of the variables display highly skewed distributions, with a concentration of values at the lower side
+and a long tail towards the higher end. This indicates that there are a few very high-value outliers compared
+to a majority of lower-value data points.The histogram for avg_cost_per_click shows a spread of values with
+a peak and then a gradual decline. But there are variations that could be explored to optimize bidding strategies.
+The histogram for avg_position shows that most ads are placed within first few positions. The histogram for
+engine_click_thru_p indicates that there are many values close to zero. This could mean that several ads or
+keywords have low click through rate.The histogram for search_engine_bid depicts a concentration of bids
+within lower range, with less concentration around high values. This indicates less expensive keywords are
+targeted or using conservative bidding strategy.
+
+```{r}
+# 2. Distribution of categorical variables
+full.data %>%
+  select('publisher_name', 'match_type', 'bid_strategy', status) %>%
+  gather(key = "variable", value = "value") %>%
+  ggplot(aes(x = value)) +
+  facet_wrap(~variable, scales = "free_x") +
+  geom_bar(fill = "coral") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Distribution of Categorical Variables")
+```
+
+Analysis:
+The bar chart for 'bid_strategy' shows a varied distribution. The most common appears to be 'Position 1-3',
+indicating a preference for strategies aiming for the top three positions in search results.
+The 'publisher_name' distribution suggests that Google Global and MSN Global are the most commonly used
+publishers. This reflects their larger market share or perceived effectiveness in reaching the target audience.
+The 'match_type' bar chart indicates a strong preference for 'Broad' match types. This could suggest a
+strategy focused on reaching a wider audience.The 'status' graph indicates that the majority of keywords
+are in 'Live' status, while a smaller number are 'Paused' or in different statuses. This suggests the campaign
+is actively managed with continuous adjustments made according to performance.Exploring diversifying bid strategies
+or reconsidering the distribution of budgets across different publishers and match types could optimize the
+campaign performance.
+
+```{r}
+# 3. Relationship between Ad position and clicks by Publisher Name
+ggplot(full.data, aes(x = `avg_position`, y = clicks)) +
+  geom_point(aes(color = `publisher_name`)) + coord_cartesian(ylim = c(0, 5000)) +
+  labs(title = "Ad Position vs. Clicks", x = "Average Position", y = "Clicks")+ facet_grid(`publisher_name`~.)
+```
+
+ANALYSIS:
+The plot uses different colors to represent different publishers, showing a direct comparison of performance.
+Most of clicks tend to cluster towards the lower numerical values, which is consistent with the industry
+understanding that ads in top positions generally receive more clicks.
+The variation in click patterns among different publishers, suggests that each publisher's platform perform differently.
+Certain publishers show a strong correlation between top ad positions and high click numbers.
+It may prove to be beneficial to prioritize those publishers and bid more aggressively for top positions.
+
+```{r}
+# 4. Relationship between the total clicks for different Status.
+full.data %>%
+  group_by(status) %>%
+  summarise(Total_Clicks = sum(clicks)) %>%
+  ggplot(aes(x = status, y = Total_Clicks, fill = status)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Status Performance", x = "Keyword Group", y = "Total Clicks")
+```
+
+ANALYSIS:
+The 'Live' status bar is significantly higher, indicating that keywords that are actively being bid on are
+driving the majority of the traffic. The 'Unavailable' status has a substantial number of clicks, which
+indicates the  missed opportunities. Reviving well-performing 'Paused' keywords or resolving issues with
+'Unavailable' ones could increase overall clicks. The 'Sent' status has least number of clicks. This
+could be due to the time it takes for keywords to be approved or might reflect on swift transition
+from 'Sent' to 'Live'.This can help in finding which keyword groups to focus on.
+
+```{r}
+# 5. Relationship between Average Position and Engine click through rate
+ggplot(full.data, aes(x = `avg_position`, y = `engine_click_thru_p`)) +
+  geom_point(colour = 'coral',alpha = 0.5) +
+  geom_smooth(method = lm, color = "firebrick2") +  # Add a linear regression line
+  theme_minimal() +
+  labs(title = "Relationship between Engine Click Thru % and Avg. Position",
+       x = "Average Position",
+       y = "Engine Click Thru %")
+```
+
+ANALYSIS:
+The plot suggests an inverse relationship where a lower 'Average Position' number,generally correlates
+with a higher 'Engine Click Through %'.Ads that appear closer to the top are more likely to be clicked,
+implying that these positions are more valuable for increasing visibility and driving traffic.
+There are some outliers that indicate that some ads in lower position still achieve high click_through
+rates. This could be due to relevance of ad content or keywords.The click-through rates can vary widely
+for similar ad positions. This could be due to specific search query or cometition at time.
+Strategically targeting higher ad positions could improve click-through rates, but it is also essential
+to consider the cost associated with these positions and the overall return on investment.
+
+```{r}
+# 6. Word Cloud of Category column without uncategorized values
+# Prepare the 'Category' column, and convert to a character vector 
+full.data$category <- as.character(full.data$category)
+
+# Exclude the 'uncategorised' entries
+full.data <- full.data[!tolower(full.data$category) == 'uncategorized', ]
+
+# Create a frequency table of the categories
+category_freq <- table(full.data$category)
+
+# Use wordcloud2 to create the word cloud
+wordcloud2(category_freq)
+```
+
+ANALYSIS:
+The term 'France' appears as the most prominent word in the cloud, suggesting that it is one of the most frequent categories.
+Several city names such as Bordeaux', 'Lyon', 'Marseille', 'Athens', 'Venice', and 'Berlin' are prominently featured.
+This suggests a strong geographic component to the keyword strategy.Words like 'flight', 'airline', 'discount', and
+'airports' are prominent, which highlights the focus on core aspects of service offerings and related terms that
+potential customers might use in search engines.The presence of words like 'international' and names of non-French
+cities indicates that the airline's keyword strategy is not limited to domestic flights but also encompasses international travel.
+The word 'general' might be associated with general or broad match keywords used in the marketing campaigns.
+
+```{r}
+# 7. Distribution of average cost per clicks per publisher 
+ggplot(full.data, aes(x = `publisher_name`, y = `avg_cost_per_click`, color = `publisher_name`)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Average Cost per clicks by Publisher", x = "Publisher Name", y = "Avg. Cost per Click")
+```
+
+ANALYSIS:
+There is a clear difference in the average cost per click across different publishers.Google - Global and Google - US
+seem to have a higher cost per click than the other publishers, which might be indicative of their market dominance or
+the higher competition for keywords on these platforms.There are several outliers, especially in the Google categories,
+where the cost per click is significantly higher than the median.The presence of outliers also suggests that certain
+keywords or ad placements are much more expensive and could be skewing the average.Overture - US and Yahoo - US appear
+to have a lower median cost compared to Google and MSN, which could be attractive for advertisers looking for more
+cost-effective options.
+
+```{r}
+# 8. Correlation heatmap
+## Analysis of Correlation Between Variables
+
+# filtering out the numeric data for correlation
+numeric_data <- full.data[, sapply(full.data, is.numeric)]
+
+# Calculate the correlation matrix
+cor_matrix <- cor(numeric_data)
+
+# Plotting the correlation heatmap 
+corrplot(cor_matrix, method = "color", type = "upper", order = "hclust",
+         addCoef.col = "black", # Add correlation coefficients
+         tl.col = "black", tl.srt = 45, # Text label color and rotation
+         diag = FALSE) # Exclude the diagonal
+```
+
+ANALYSIS:
+The heatmap shows strong positive correlations between pairs such as 'total_volume_of_bookings' and 'amount',
+'roa' (return on advertising) and 'trans_conv_p' (transaction conversion probability), indicating that as one increases,
+so does the other.There are also some negative correlations, such as between 'avg_cost_per_click' and 'avg_position'.
+This suggests that as the average position of an ad improves, the average cost per click decreases.The positive correlation
+between 'search_engine_bid' and 'clicks' indicates that higher bids might be associated with more clicks.It could reflect
+the competitive nature of higher-value keywords.High correlations involving 'roa' and 'trans_conv_p' with other
+variables suggest that these are key indicators of a campaign's profitability and should be closely monitored and optimized.
+
+## CONCLUSION
+Air France's paid search campaign shows promising results with profitable returns.
+Optimization opportunities exist to improve ROA and targeting across various channels.
+Refine keyword selection and targeting, focusing on Air France's brand and website
+terms for higher booking intent.Google is dominant in traffic but needs US-specific
+optimization for better efficiency. Yahoo has the highest ROA in the US, but
+cost-effectiveness compared to Google needs evaluation.The MSN-Global campaign offers
+the highest ROA after Kayak, suggesting potential for further budget allocation.
+Overture offers low CPCs but requires investigation into booking probability and
+effectiveness. Kayak has significantly higher average booking value and ROA,
+suggesting an audience with high motive for booking.
+
+## ACTIONABLE INSIGHTS
+1. Diversify beyond Google-US: While Google-US drives the most traffic, consider expanding reach to
+other channels (Barker, 2020) like Yahoo-US and MSN-Global for cost-effective conversions. These 
+channels boast higher ROA and lower CPC compared to Google-US.
+
+2. Optimize campaigns based on channel strengths (D, 2021):
+Yahoo-US: Focus on optimizing campaigns further due to its high ROI and booking probability (Smulders, 2022)
+despite lower average revenue per booking.
+Overture(Global and US): Investigate their effectiveness as they have low booking probabilities
+compared to other channels.
+MSN (Global and US): Allocate budget strategically due to their good performance in revenue
+per booking and ROI.
+Google-US: Optimize targeting and potentially explore Position 1-2 and Position 5-10 bid
+strategies for higher effectiveness.
+
+3. Consider Kayak as a publisher channel(Edelman & Heller, 2015): Analyze its effectiveness further 
+due to its exceptionally high average revenue per user, potentially targeting a niche audience with 
+higher spending power.Consider utilizing it for brand awareness and direct bookings.
+
+## CASE QUESTIONS
+Q1: Should Media Contacts recommend a uniform strategy for Air France across search
+engine publishers? Or would it be more effective to tailor each publisher strategy to
+maximize return on investment?
+
+Answer:
+Deciding whether to use a uniform approach for all search engine publishers or customize strategies
+for each publisher to optimize return on investment (ROI) is based on the performance data collected.
+Click-through rate (CTR) data indicates varying degrees of engagement across different publishers,
+with platforms such as Yahoo - US demonstrating notably greater CTRs than others.This variability
+in performance suggests that a universal approach may not be optimal.Additionally, the average cost
+per click data from publishers shows that the costs of these clicks differ, with certain publishers
+being more cost-efficient than others.Thus, customizing techniques based on the strengths of each
+publication and the behaviors of their audience can result in more effective budget distribution
+and increased return on investment.Focusing on publishers with greater click-through rates and
+lower costs per click could optimize campaign success and profitability for Air France,
+according to the statistics.
+
+Q2: How can campaigns be improved to increase overall value gained from investment with a
+search engine publisher? Should keywords be added or dropped from the campaign?
+Should campaign tactics or copy be adjusted to improve campaign performance?
+
+Answer:
+Enhancing campaigns to maximize the return on investment with a search engine publisher requires a
+comprehensive strategy.The correlation heatmap shows significant connections between specific measures,
+including total booking volume and revenue, emphasizing the need to prioritize conversion-focused
+keywords that are known to increase bookings.The study indicates that it could be advantageous to
+include or highlight keywords that closely match greater conversion rates and ROI, while decreasing
+or eliminating spending on underperforming keywords.The differences in ad position and clicks among
+publishers suggest the necessity of adapting campaign strategies or ad content to match the specific
+characteristics of each platform.Ad copy that effectively connect with a certain publisher's
+audience and result in higher click-through rates should be given preference.It is important to
+regularly test and modify campaigns using performance data to keep the ad copy relevant and engaging,
+thereby enhancing campaign performance.
+
+Q3: What are the most important KPIs, and what impact will campaign changes have on these
+KPIs?
+
+Answer:\
+Most Important KPIs-\
+1. Click Through Rate (CTR): This measures how many people are seeing the ad and clicking on it,
+    indicating initial interest.\
+    CTR = (Number of clicks) / (Number of impressions)\
+2. Cost per Click (CPC): This represents the average cost incurred for each user click on an ad.\
+    CPC = (Total click charges) / (Number of clicks)\
+3. Transaction Conversion Rate (TCR): This shows the percentage of clicks that convert into
+    actual bookings, indicating effectiveness in converting initial interest into sales.\
+    TCR = (Number of completed transactions) / (Number of clicks)\
+4. Net Revenue: This reveals the total revenue generated after accounting for campaign costs.\
+    Net Revenue = Amount - Total Cost\
+5. Return on Advertisement (ROA): This measures the return on investment in advertising expenses,
+    showing how efficiently ad spend translates into revenue.\
+    ROA = Net Revenue / Total Cost\
+6. Booking probability: This combines CTR and TCR, offering a single metric to gauge the
+    likelihood of an ad resulting in a booking.\
+    Booking Probability = CTR * TCR\
+
+Impact of Campaign Changes on KPIs:\
+1. Global and US Campaign effect:\
+  Global campaigns: Higher ROA in Google and MSN, suggesting potential for US targeting optimization.\
+  US campaigns: Lower ROA compared to global counterparts, requiring improvement.\
+2. Channel-Specific effect\
+  Yahoo-US: High ROA and CTR, suggesting effective targeting but high CPC compared to Google-US.\
+  Google-US: High traffic, conversion rate, and booking probability but at a higher cost per click.\
+  MSN (Global and US): High revenue per booking and ROI, indicating potential for budget allocation.\
+  Overture (Global and US): Lowest CPC but also lowest booking probabilities, requiring further
+  investigation.\
+  
+Q4: How should future SEM campaigns be structured? In the past, Media Contacts had
+concentrated on Google, Microsoft, and Yahoo; was there now an opportunity to
+optimize search advertising with metasearch companies such as Kayak?
+
+Answer: Consider including metasearch companies like Kayak and cost-efficient channels
+like Yahoo-US and MSN-Global while maintaining presence on established platforms like Google.
+Tailor campaigns to each platform's strengths(Nagy, 2022) and target audiences.For example, use Yahoo-US for high
+booking probability and MSN for higher revenue per booking.Conduct A/B testing to determine
+the best match types (exact, phrase, broad) for each platform to ensure relevant traffic
+and optimal conversion rates. Analyze reasons for lower US performance and adjust targeting
+or bidding strategies accordingly.Ensure keyword groups are properly categorized and target
+relevant keywords at different stages of the buying journey (e.g., brand awareness,
+destination search, booking intent). By regularly monitor campaign performance and adjusting strategies
+based on the data to maintain optimal performance and ROA, Air France can effectively optimize
+its future SEM campaigns across various platforms and achieve its goals of brand awareness,
+website traffic, and conversions in the competitive U.S. air travel market.
+
+
+#### Bibliography:
+1. Barker, A. (2020, February 26). “Cookie apocalypse” forces profound changes in online advertising. Financial Times. https://www.ft.com/content/169079b2-3ba1-11ea-b84f-a62c46f39bc2
+2. Smulders, S. (2022, March 2). Council Post: How To Make Multichannel Marketing Your Strategy For 2022. Forbes. https://www.forbes.com/sites/forbesbusinesscouncil/2022/03/02/how-to-make-multichannel-marketing-your-strategy-for-2022/?sh=6905af4660dd
+3. D, P. (2021, October 31). Digital Marketing Channels: Effectiveness and Best Practices. Adsterra Affiliate Marketing and Traffic Monetization Blog. https://adsterra.com/blog/digital-marketing-channels/
+3. Edelman, D., & Heller, J. (2015, July 1). How digital marketing operations can transform business | McKinsey. Www.mckinsey.com. https://www.mckinsey.com/capabilities/growth-marketing-and-sales/our-insights/how-digital-marketing-operations-can-transform-business
+4. Lemon, K. N., & Verhoef, P. C. (2016). Understanding Customer Experience Throughout the Customer Journey. Journal of Marketing, 80(6), 69-96. https://doi.org/10.1509/jm.15.0420
+5. Nagy, C. (2022, June 15). Can Air France Make a Business of Leaning Into Elegance? Skift. https://skift.com/2022/06/15/can-air-france-make-a-business-of-leaning-into-elegance/
+6. Zigu. (2016). Air France Marketing Mix (4Ps) Strategy | MBA Skool-Study.Learn.Share. MBA Skool-Study.Learn.Share. https://www.mbaskool.com/marketing-mix/services/17254-air-france.html
+7. How to Use Multi-Channel Marketing to Increase Sales. (n.d.). Mailchimp. https://mailchimp.com/resources/why-multichannel-campaigns-matter/
+
+
+
+
